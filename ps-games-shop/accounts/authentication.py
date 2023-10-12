@@ -1,45 +1,60 @@
+from rest_framework import status, exceptions
+from django.http import HttpResponse
+from rest_framework.authentication import get_authorization_header, BaseAuthentication
+from .models import Account
 import jwt
-import datetime
-from rest_framework import exceptions
+import json
 
 
-def create_access_token(id):
-    return jwt.encode(
-        {
-            "acoount_id": id,
-            "exp": datetime.datetime.utcnow() + datetime.timedelta(seconds=60),
-            "iat": datetime.datetime.utcnow(),
-        },
-        "access_secret",
-        algorithm="HS256",
-    )
+class JwtAuthentication(BaseAuthentication):
 
+    model = None
 
-def decode_access_token(token):
-    try:
-        payload = jwt.decode(token, "access_secret", algorithms="HS256")
+    def get_model(self):
+        return Account
 
-        return payload["acoount_id"]
-    except:
-        raise exceptions.AuthenticationFailed("unauthenticated")
+    def authenticate(self, request):
+        auth = get_authorization_header(request).split()
+        if not auth or auth[0].lower() != b'token':
+            return None
 
+        if len(auth) == 1:
+            msg = 'Invalid token header. No credentials provided.'
+            raise exceptions.AuthenticationFailed(msg)
+        elif len(auth) > 2:
+            msg = 'Invalid token header'
+            raise exceptions.AuthenticationFailed(msg)
 
-def create_refresh_token(id):
-    return jwt.encode(
-        {
-            "acoount_id": id,
-            "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7),
-            "iat": datetime.datetime.utcnow(),
-        },
-        "refresh_secret",
-        algorithm="HS256",
-    )
+        try:
+            token = auth[1]
+            if token=="null":
+                msg = 'Null token not allowed'
+                raise exceptions.AuthenticationFailed(msg)
+        except UnicodeError:
+            msg = 'Invalid token header. Token string should not contain invalid characters.'
+            raise exceptions.AuthenticationFailed(msg)
 
+        return self.authenticate_credentials(token)
 
-def decode_refresh_token(token):
-    try:
-        payload = jwt.decode(token, "refresh_secret", algorithms="HS256")
+    def authenticate_credentials(self, token):
+        model = self.get_model()
+        payload = jwt.decode(token, "SECRET_KEY")
+        userid = payload['id']
+        msg = {'Error': "Token mismatch",'status' :"401"}
+        try:
+            user = Account.objects.get(
+                id=userid,
+                is_active=True
+            )
+            if not user.token['token'] == token:
+                raise exceptions.AuthenticationFailed(msg)
+               
+        except jwt.ExpiredSignatureError or jwt.DecodeError or jwt.InvalidTokenError:
+            return HttpResponse({'Error': "Token is invalid"}, status="403")
+        except Account.DoesNotExist:
+            return HttpResponse({'Error': "Internal server error"}, status="500")
 
-        return payload["acoount_id"]
-    except:
-        raise exceptions.AuthenticationFailed("unauthenticated")
+        return (user, token)
+
+    def authenticate_header(self, request):
+        return 'Token'
